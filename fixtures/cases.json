@@ -1,0 +1,62 @@
+[
+  {
+    "name": "两边确认成功",
+    "routes": [],
+    "input": {
+      "requestId": "trip-1"
+    },
+    "expected": {
+      "state": "confirmed",
+      "duplicateBookings": 0
+    },
+    "required": [],
+    "kind": "browser",
+    "mode": "success",
+    "actions": [
+      "hold:boat",
+      "hold:equipment",
+      "confirm:boat",
+      "confirm:equipment"
+    ],
+    "productNumber": 11
+  },
+  {
+    "name": "设备保留失败释放船位",
+    "routes": [],
+    "input": {
+      "requestId": "trip-1"
+    },
+    "expected": {
+      "state": "released",
+      "duplicateBookings": 0
+    },
+    "required": [],
+    "kind": "browser",
+    "mode": "reject",
+    "actions": [
+      "hold:boat",
+      "hold:equipment",
+      "release:boat"
+    ],
+    "productNumber": 11
+  },
+  {
+    "name": "人工已经使用不可自动取消",
+    "routes": [],
+    "input": {
+      "requestId": "trip-1"
+    },
+    "expected": {
+      "state": "manual",
+      "duplicateBookings": 0
+    },
+    "required": [],
+    "kind": "browser",
+    "mode": "consumed",
+    "actions": [
+      "hold:boat",
+      "hold:equipment"
+    ],
+    "productNumber": 11
+  }
+]
