@@ -7,7 +7,7 @@ export async function startSource(scenario, options = {}) {
   if (scenario.kind === 'h2') return (await import('./transport.mjs')).createH2Source(scenario);
   const history = [];
   const counters = new Map();
-  const portal = scenario.kind === 'browser' ? (await import('./portal.mjs')).createPortal(scenario, history) : null;
+  const portal = scenario.kind === 'browser' ? (await import('./portal.mjs')).createPortal(scenario, history, options.portal ?? scenario.portal) : null;
   const outlets = {};
   const gateways = [];
   let origin;
@@ -45,7 +45,7 @@ export async function startSource(scenario, options = {}) {
       if (outlet && request.headers['x-tenant'] !== outlet[1]) {
         response.writeHead(403).end('出口租户不匹配'); return;
       }
-      const entry = scenario.routes.find(candidate => candidate.path === logical && (candidate.method ?? 'GET') === request.method);
+      const entry = (scenario.routes ?? []).find(candidate => candidate.path === logical && (candidate.method ?? 'GET') === request.method);
       if (!entry) { response.writeHead(404).end('本地来源无此资源'); return; }
       const count = counters.get(logical) ?? 0;
       counters.set(logical, count + 1);
@@ -69,7 +69,7 @@ export async function startSource(scenario, options = {}) {
     server.listen(options.port ?? 0, options.host ?? '0.0.0.0', resolve);
   });
   origin = `http://127.0.0.1:${server.address().port}`;
-  if (scenario.routes.some(entry => entry.path === '/policy')) {
+  if ((scenario.routes ?? []).some(entry => entry.path === '/policy')) {
     for (const tenant of ['A', 'B']) {
       const gateway = http.createServer((request, response) => {
         const upstream = http.request(origin + '/outlets/' + tenant + request.url, { method: request.method, headers: request.headers }, reply => {

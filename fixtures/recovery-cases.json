@@ -1,0 +1,183 @@
+[
+  {
+    "name": "执行中进程中断，重启后按业务编号续办成功",
+    "kind": "browser",
+    "mode": "success",
+    "input": {
+      "requestId": "trip-1"
+    },
+    "interrupt": {
+      "phase": "after-hold-equipment"
+    },
+    "expected": {
+      "state": "confirmed",
+      "duplicateBookings": 0
+    },
+    "check": {
+      "portal": {
+        "boat": "confirmed",
+        "equipment": "confirmed"
+      },
+      "forbidReleases": [
+        "boat",
+        "equipment"
+      ],
+      "maxHolds": {
+        "boat": 1,
+        "equipment": 1
+      }
+    },
+    "productNumber": 11
+  },
+  {
+    "name": "设备保留失败，释放未使用的船位",
+    "kind": "browser",
+    "mode": "reject",
+    "input": {
+      "requestId": "trip-1"
+    },
+    "expected": {
+      "state": "released",
+      "duplicateBookings": 0
+    },
+    "check": {
+      "portal": {
+        "boat": "available",
+        "equipment": "available"
+      },
+      "forbidReleases": [
+        "equipment"
+      ],
+      "maxHolds": {
+        "boat": 1,
+        "equipment": 1
+      }
+    },
+    "productNumber": 11
+  },
+  {
+    "name": "船位确认后执行进程失联，重启后核对并继续",
+    "kind": "browser",
+    "mode": "success",
+    "input": {
+      "requestId": "trip-1"
+    },
+    "interrupt": {
+      "phase": "after-confirm-boat"
+    },
+    "expected": {
+      "state": "confirmed",
+      "duplicateBookings": 0
+    },
+    "check": {
+      "portal": {
+        "boat": "confirmed",
+        "equipment": "confirmed"
+      },
+      "forbidReleases": [
+        "boat",
+        "equipment"
+      ],
+      "maxHolds": {
+        "boat": 1,
+        "equipment": 1
+      }
+    },
+    "productNumber": 11
+  },
+  {
+    "name": "船位确认响应丢失，回读确认真实结果",
+    "kind": "browser",
+    "mode": "success",
+    "portal": {
+      "loseResponse": [
+        "confirm:boat"
+      ],
+      "confirmDelayMs": 600
+    },
+    "input": {
+      "requestId": "trip-1"
+    },
+    "expected": {
+      "state": "confirmed",
+      "duplicateBookings": 0
+    },
+    "check": {
+      "portal": {
+        "boat": "confirmed",
+        "equipment": "confirmed"
+      },
+      "forbidReleases": [
+        "boat",
+        "equipment"
+      ],
+      "maxHolds": {
+        "boat": 1,
+        "equipment": 1
+      },
+      "maxConfirms": {
+        "boat": 1,
+        "equipment": 1
+      }
+    },
+    "productNumber": 11
+  },
+  {
+    "name": "船位确认后设备确认被拒，保留已确认船位转人工",
+    "kind": "browser",
+    "mode": "success",
+    "portal": {
+      "rejectConfirm": [
+        "equipment"
+      ]
+    },
+    "input": {
+      "requestId": "trip-1"
+    },
+    "expected": {
+      "state": "manual",
+      "duplicateBookings": 0
+    },
+    "check": {
+      "portal": {
+        "boat": "confirmed",
+        "equipment": "available"
+      },
+      "forbidReleases": [
+        "boat"
+      ],
+      "maxHolds": {
+        "boat": 1,
+        "equipment": 1
+      }
+    },
+    "productNumber": 11
+  },
+  {
+    "name": "人工已经使用船位，不自动取消",
+    "kind": "browser",
+    "mode": "consumed",
+    "input": {
+      "requestId": "trip-1"
+    },
+    "expected": {
+      "state": "manual",
+      "duplicateBookings": 0
+    },
+    "check": {
+      "portal": {
+        "boat": "confirmed",
+        "equipment": "available"
+      },
+      "forbidReleases": [
+        "boat",
+        "equipment"
+      ],
+      "maxHolds": {
+        "boat": 1,
+        "equipment": 1
+      }
+    },
+    "productNumber": 11
+  }
+]

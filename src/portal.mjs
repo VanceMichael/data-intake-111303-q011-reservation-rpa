@@ -1,17 +1,39 @@
 import { readFile } from 'node:fs/promises';
 
-export function createPortal(scenario, history) {
+export function createPortal(scenario, history, options = {}) {
   const actions = [];
   const number = scenario.productNumber;
-  const mode = scenario.mode;
+  const mode = options.portalMode ?? scenario.mode;
+  // 门户仍可运行在正常的服务端保留期限下：默认保留会到期，演练可显式选择 free。
+  const expiryMs = options.holdExpiryMs !== undefined
+    ? options.holdExpiryMs
+    : mode === 'free' ? 0 : 4000;
+  const rejectConfirm = new Set(options.rejectConfirm ?? []);
+  const confirmDelayMs = Number(options.confirmDelayMs ?? 0);
+  const loseResponse = new Set(options.loseResponse ?? []);
   const state = {
-    mode, number, version: 2, requestId: null,
-    boat: { state: 'available', used: false }, equipment: { state: 'available', used: false },
+    mode, number, version: 2, requestId: null, sequence: 0,
+    boat: { state: 'available', used: false, requestId: null, receipt: null, expiresAt: null },
+    equipment: { state: 'available', used: false, requestId: null, receipt: null, expiresAt: null },
     record: { note: '现场新备注', method: 'manual', container: 'glass' },
     duplicateBookings: 0, duplicateRecords: 0, accepted: {}, rows: [], preview: null,
     point: 'p1', revision: 1, generation: 1,
   };
   let commitCount = 0;
+  const changed = () => {
+    state.sequence += 1;
+    return state;
+  };
+  const dropResponse = (response, label) => {
+    // 服务端已经写入，但响应在返回途中被截断；机器人必须靠回读判断业务结果。
+    if (!loseResponse.has(label)) return false;
+    loseResponse.delete(label);
+    response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    response.write('{"partial":');
+    response.destroy();
+    // 页面动作已经到达门户但拿不到完整结果，不改写页面状态。
+    return true;
+  };
   const writeJson = (response, value, status = 200) => {
     response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     response.end(JSON.stringify(value));
@@ -50,27 +72,91 @@ export function createPortal(scenario, history) {
       let input;
       try { input = JSON.parse(raw); } catch { writeJson(response, { error: '无效 JSON' }, 400); return true; }
       const action = input.action;
-      actions.push({ action: input.target ? action + ':' + input.target : action === 'select' || action === 'download' ? action + ':' + input.point : action, input, userAgent: request.headers['user-agent'] });
+      actions.push({ action: input.target ? action + ':' + input.target : action === 'select' || action === 'download' ? action + ':' + input.point : action, input, userAgent: request.headers['user-agent'], result: 'observed' });
+      const mark = value => { actions.at(-1).result = value; };
       if (number === 11) {
-        if (action === 'lookup') { writeJson(response, state); return true; }
-        const target = state[input.target];
+        if (action === 'lookup') {
+          changed();
+          writeJson(response, state); return true;
+        }
         if (!['boat', 'equipment'].includes(input.target)) { writeJson(response, { error: '无此预约对象' }, 400); return true; }
+        const target = state[input.target];
+        const requestId = String(input.requestId ?? '');
+        if (!requestId) { writeJson(response, { error: '缺少采样请求号' }, 400); return true; }
         if (action === 'hold') {
           if (input.target === 'equipment' && ['reject', 'consumed'].includes(mode)) {
-            if (mode === 'consumed') { state.boat.state = 'confirmed'; state.boat.used = true; }
+            if (mode === 'consumed') {
+              // 人工在设备侧处理时已经把船位当作实际出船使用，不能再当作可释放的保留。
+              state.boat.state = 'confirmed'; state.boat.used = true; state.boat.requestId = state.boat.requestId ?? 'staff-usage';
+              state.sequence += 1;
+            }
+            mark('rejected');
             writeJson(response, { error: '设备无可用位置', state }, 409); return true;
           }
-          if (target.state !== 'available') state.duplicateBookings += 1;
-          state.requestId = input.requestId; target.state = 'held'; target.expiresAt = Date.now() + 4000; target.receipt = input.target + '-' + input.requestId;
+          if (target.state === 'held' || target.state === 'confirmed') {
+            if (target.requestId === requestId) {
+              if (target.state === 'held' && target.expiresAt != null && target.expiresAt < Date.now()) {
+                // 同一请求的保留已过期限但尚未被确认：按同一请求续办，不产生第二份占位。
+                target.expiresAt = expiryMs > 0 ? Date.now() + expiryMs : null;
+                changed();
+                mark('renewed');
+                writeJson(response, { ...state, renewed: true, target: input.target }); return true;
+              }
+              // 同一请求的重复执行按门户事实返回，不制造第二份保留。
+              mark('idempotent');
+              writeJson(response, { ...state, idempotent: true, target: input.target }); return true;
+            }
+            state.duplicateBookings += 1;
+            mark('duplicate');
+            writeJson(response, { error: '该对象已被占用', state }, 409); return true;
+          }
+          state.requestId = requestId;
+          target.state = 'held';
+          target.requestId = requestId;
+          target.used = false;
+          target.expiresAt = expiryMs > 0 ? Date.now() + expiryMs : null;
+          target.receipt = input.target + '-' + requestId;
+          changed();
+          mark('applied');
+          if (dropResponse(response, 'hold:' + input.target)) return true;
         }
         if (action === 'confirm') {
-          if (target.state !== 'held' || target.expiresAt < Date.now()) { writeJson(response, { error: '保留失效', state }, 409); return true; }
+          if (rejectConfirm.has(input.target)) {
+            if (confirmDelayMs > 0) await new Promise(resolve => setTimeout(resolve, confirmDelayMs));
+            mark('rejected');
+            writeJson(response, { error: '场所确认被拒绝', state }, 409); return true;
+          }
+          if (target.state === 'confirmed' && target.requestId === requestId) {
+            mark('idempotent');
+            writeJson(response, { ...state, idempotent: true, target: input.target }); return true;
+          }
+          if (target.state !== 'held' || (target.expiresAt != null && target.expiresAt < Date.now())) {
+            if (target.state === 'held') { target.state = 'expired'; changed(); }
+            mark('rejected');
+            writeJson(response, { error: '保留失效', state }, 409); return true;
+          }
           target.state = 'confirmed';
+          target.expiresAt = null;
+          changed();
+          mark('applied');
+          if (confirmDelayMs > 0) await new Promise(resolve => setTimeout(resolve, confirmDelayMs));
+          if (dropResponse(response, 'confirm:' + input.target)) return true;
         }
         if (action === 'release') {
-          if (target.used) { writeJson(response, { error: '人工已经使用', state }, 409); return true; }
+          if (target.used) { mark('rejected'); writeJson(response, { error: '人工已经使用', state }, 409); return true; }
+          if (target.state === 'available') {
+            mark('idempotent');
+            writeJson(response, { ...state, idempotent: true, target: input.target }); return true;
+          }
           target.state = 'available';
+          target.requestId = null;
+          target.receipt = null;
+          target.expiresAt = null;
+          changed();
+          mark('applied');
+          if (dropResponse(response, 'release:' + input.target)) return true;
         }
+        writeJson(response, state); return true;
       }
       if (number === 12 && action === 'save') {
         if (input.version !== state.version) { writeJson(response, { error: '版本冲突', state }, 409); return true; }
